@@ -1,0 +1,40 @@
+---
+# App Service (ClusterIP - accessed via Ingress/ALB)
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-app-service
+  namespace: production
+  labels:
+    app: devops-app
+  annotations:
+    # AWS ALB Target Group binding annotation
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+spec:
+  type: ClusterIP
+  selector:
+    app: devops-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+---
+# NodePort for direct testing (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-app-nodeport
+  namespace: production
+  labels:
+    app: devops-app
+spec:
+  type: NodePort
+  selector:
+    app: devops-app
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 30000
+      protocol: TCP

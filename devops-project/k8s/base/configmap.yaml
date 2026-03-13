@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: production
+  labels:
+    app: devops-app
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  DB_HOST: "mysql-service.database.svc.cluster.local"
+  DB_PORT: "3306"
+  DB_NAME: "devopsdb"
+  APP_VERSION: "1.0.0"
+  LOG_LEVEL: "info"

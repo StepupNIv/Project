@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DevOps Practice Platform</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@300;400;600;700&display=swap');
+  :root {
+    --bg: #0a0e1a; --surface: #111827; --card: #1a2235;
+    --accent: #00d4ff; --green: #00ff88; --orange: #ff6b35;
+    --red: #ff3b6b; --text: #e2e8f0; --muted: #64748b;
+    --border: rgba(0,212,255,0.15);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Space Grotesk',sans-serif; min-height:100vh; }
+  header { background:var(--surface); border-bottom:1px solid var(--border); padding:1.2rem 2rem; display:flex; align-items:center; justify-content:space-between; }
+  header h1 { font-size:1.4rem; font-weight:700; color:var(--accent); letter-spacing:.05em; }
+  header span { font-family:'JetBrains Mono',monospace; font-size:.75rem; color:var(--muted); }
+  .status-dot { width:8px; height:8px; border-radius:50%; background:var(--green); display:inline-block; margin-right:.5rem; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+  .container { max-width:1200px; margin:0 auto; padding:2rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1.2rem; margin-bottom:2rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.5rem; transition:.2s; }
+  .card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .card-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); margin-bottom:.6rem; }
+  .card-value { font-size:2rem; font-weight:700; font-family:'JetBrains Mono',monospace; }
+  .card-value.green { color:var(--green); }
+  .card-value.blue { color:var(--accent); }
+  .card-value.orange { color:var(--orange); }
+  .card-value.red { color:var(--red); }
+  .section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.5rem; margin-bottom:1.5rem; }
+  .section-title { font-size:1rem; font-weight:600; margin-bottom:1.2rem; color:var(--accent); border-bottom:1px solid var(--border); padding-bottom:.8rem; }
+  .pipeline { display:flex; align-items:center; gap:.5rem; padding:.8rem 0; border-bottom:1px solid rgba(255,255,255,.05); }
+  .pipeline:last-child { border-bottom:none; }
+  .badge { padding:.3rem .7rem; border-radius:6px; font-size:.72rem; font-family:'JetBrains Mono',monospace; font-weight:700; text-transform:uppercase; }
+  .badge.success { background:rgba(0,255,136,.15); color:var(--green); }
+  .badge.running { background:rgba(0,212,255,.15); color:var(--accent); }
+  .badge.failed { background:rgba(255,59,107,.15); color:var(--red); }
+  .badge.pending { background:rgba(255,107,53,.15); color:var(--orange); }
+  .pipeline-name { flex:1; font-size:.9rem; }
+  .pipeline-time { font-size:.75rem; color:var(--muted); font-family:'JetBrains Mono',monospace; }
+  .k8s-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:.8rem; }
+  .k8s-pod { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem; font-family:'JetBrains Mono',monospace; font-size:.78rem; }
+  .k8s-pod .pod-name { color:var(--accent); margin-bottom:.4rem; font-size:.7rem; word-break:break-all; }
+  .k8s-pod .pod-status { color:var(--green); }
+  .form-row { display:flex; gap:1rem; margin-bottom:1rem; }
+  input { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.7rem 1rem; color:var(--text); font-family:inherit; font-size:.9rem; flex:1; outline:none; }
+  input:focus { border-color:var(--accent); }
+  button { background:var(--accent); color:var(--bg); border:none; border-radius:8px; padding:.7rem 1.5rem; font-family:inherit; font-weight:700; font-size:.9rem; cursor:pointer; transition:.2s; }
+  button:hover { opacity:.85; }
+  table { width:100%; border-collapse:collapse; font-size:.85rem; }
+  th { text-align:left; padding:.7rem 1rem; font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); border-bottom:1px solid var(--border); }
+  td { padding:.8rem 1rem; border-bottom:1px solid rgba(255,255,255,.03); font-family:'JetBrains Mono',monospace; font-size:.82rem; }
+  tr:hover td { background:rgba(255,255,255,.02); }
+  .tag { display:inline-block; background:rgba(0,212,255,.1); color:var(--accent); border-radius:4px; padding:.15rem .5rem; font-size:.68rem; margin:.1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ DevOps Practice Platform</h1>
+  <span><span class="status-dot"></span>All Systems Operational &nbsp;|&nbsp; ENV: <span id="env-badge">PRODUCTION</span></span>
+</header>
+<div class="container">
+  <!-- Stats -->
+  <div class="grid" id="stats">
+    <div class="card"><div class="card-label">App Status</div><div class="card-value green" id="stat-status">●&nbsp;HEALTHY</div></div>
+    <div class="card"><div class="card-label">Uptime (s)</div><div class="card-value blue" id="stat-uptime">—</div></div>
+    <div class="card"><div class="card-label">DB Connection</div><div class="card-value green" id="stat-db">●&nbsp;OK</div></div>
+    <div class="card"><div class="card-label">Total Users</div><div class="card-value orange" id="stat-users">—</div></div>
+  </div>
+
+  <!-- Jenkins Pipelines -->
+  <div class="section">
+    <div class="section-title">🔧 Jenkins CI/CD Pipelines</div>
+    <div id="pipelines">
+      <div class="pipeline"><span class="badge success">SUCCESS</span><span class="pipeline-name">devops-app » main » build-push-deploy</span><span class="pipeline-time">#47 · 3m 12s ago</span></div>
+      <div class="pipeline"><span class="badge running">RUNNING</span><span class="pipeline-name">devops-app » feature/user-api » unit-tests</span><span class="pipeline-time">#12 · running 1m 45s</span></div>
+      <div class="pipeline"><span class="badge success">SUCCESS</span><span class="pipeline-name">devops-app » staging » integration-tests</span><span class="pipeline-time">#31 · 15m ago</span></div>
+      <div class="pipeline"><span class="badge failed">FAILED</span><span class="pipeline-name">devops-app » release/1.2 » sonar-analysis</span><span class="pipeline-time">#8 · 42m ago</span></div>
+      <div class="pipeline"><span class="badge pending">PENDING</span><span class="pipeline-name">devops-app » prod » helm-deploy</span><span class="pipeline-time">#19 · queued</span></div>
+    </div>
+  </div>
+
+  <!-- Kubernetes Pods -->
+  <div class="section">
+    <div class="section-title">☸️ Kubernetes Components</div>
+    <div class="k8s-grid" id="pods">
+      <div class="k8s-pod"><div class="pod-name">devops-app-7d9f4b-xk2p1</div><div>NS: production</div><div class="pod-status">Running ✓</div><div>2/2 Ready</div></div>
+      <div class="k8s-pod"><div class="pod-name">devops-app-7d9f4b-mn3q8</div><div>NS: production</div><div class="pod-status">Running ✓</div><div>2/2 Ready</div></div>
+      <div class="k8s-pod"><div class="pod-name">devops-app-7d9f4b-rp5w2</div><div>NS: production</div><div class="pod-status">Running ✓</div><div>2/2 Ready</div></div>
+      <div class="k8s-pod"><div class="pod-name">mysql-primary-0</div><div>NS: database</div><div class="pod-status">Running ✓</div><div>1/1 Ready</div></div>
+      <div class="k8s-pod"><div class="pod-name">mysql-replica-0</div><div>NS: database</div><div class="pod-status">Running ✓</div><div>1/1 Ready</div></div>
+      <div class="k8s-pod"><div class="pod-name">nginx-ingress-ctrl</div><div>NS: ingress-nginx</div><div class="pod-status">Running ✓</div><div>1/1 Ready</div></div>
+    </div>
+    <div style="margin-top:1.2rem; display:flex; flex-wrap:wrap; gap:.5rem;">
+      <span>Components:</span>
+      <span class="tag">Deployment</span><span class="tag">Service</span><span class="tag">Ingress</span>
+      <span class="tag">ConfigMap</span><span class="tag">Secret</span><span class="tag">HPA</span>
+      <span class="tag">PVC</span><span class="tag">StatefulSet</span><span class="tag">ServiceAccount</span>
+      <span class="tag">RBAC</span><span class="tag">NetworkPolicy</span><span class="tag">PodDisruptionBudget</span>
+    </div>
+  </div>
+
+  <!-- Users API -->
+  <div class="section">
+    <div class="section-title">👤 Users API — Live Data</div>
+    <div class="form-row">
+      <input id="inp-name" placeholder="Full Name" type="text"/>
+      <input id="inp-email" placeholder="email@example.com" type="email"/>
+      <button onclick="addUser()">+ Add User</button>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Created</th></tr></thead>
+      <tbody id="users-table"><tr><td colspan="4" style="color:var(--muted);text-align:center">Loading...</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Infrastructure Info -->
+  <div class="section">
+    <div class="section-title">🏗️ Infrastructure Stack</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;font-size:.85rem;">
+      <div><div style="color:var(--muted);margin-bottom:.4rem">Container Registry</div><div>AWS ECR / DockerHub</div></div>
+      <div><div style="color:var(--muted);margin-bottom:.4rem">Load Balancer</div><div>AWS ALB (ingress-nginx)</div></div>
+      <div><div style="color:var(--muted);margin-bottom:.4rem">Kubernetes</div><div>EKS 1.28 (3 nodes)</div></div>
+      <div><div style="color:var(--muted);margin-bottom:.4rem">Database</div><div>MySQL 8.0 (StatefulSet)</div></div>
+      <div><div style="color:var(--muted);margin-bottom:.4rem">CI/CD</div><div>Jenkins 2.x + Helm 3</div></div>
+      <div><div style="color:var(--muted);margin-bottom:.4rem">Monitoring</div><div>Prometheus + Grafana</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function fetchHealth() {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    document.getElementById('stat-status').textContent = '● HEALTHY';
+    document.getElementById('stat-uptime').textContent = Math.floor(d.uptime) + 's';
+    document.getElementById('stat-db').textContent = d.database === 'ok' ? '● OK' : '✗ ERROR';
+    document.getElementById('env-badge').textContent = (d.environment || 'dev').toUpperCase();
+  } catch(e) {
+    document.getElementById('stat-status').textContent = '✗ UNREACHABLE';
+  }
+}
+async function fetchUsers() {
+  try {
+    const r = await fetch('/api/v1/users');
+    const d = await r.json();
+    document.getElementById('stat-users').textContent = d.count;
+    const tb = document.getElementById('users-table');
+    if (!d.data.length) { tb.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No users yet</td></tr>'; return; }
+    tb.innerHTML = d.data.map(u => `<tr><td>${u.id}</td><td>${u.name}</td><td>${u.email}</td><td>${new Date(u.created_at).toLocaleString()}</td></tr>`).join('');
+  } catch(e) {
+    document.getElementById('stat-users').textContent = 'N/A';
+  }
+}
+async function addUser() {
+  const name = document.getElementById('inp-name').value.trim();
+  const email = document.getElementById('inp-email').value.trim();
+  if (!name || !email) return alert('Please fill both fields');
+  await fetch('/api/v1/users', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name,email}) });
+  document.getElementById('inp-name').value = '';
+  document.getElementById('inp-email').value = '';
+  fetchUsers();
+}
+fetchHealth(); fetchUsers();
+setInterval(fetchHealth, 10000);
+setInterval(fetchUsers, 15000);
+</script>
+</body>
+</html>

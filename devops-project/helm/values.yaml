@@ -1,0 +1,118 @@
+# ─── Helm Chart: devops-practice-app ─────────────────────────────────────────
+# Override any of these in your environment-specific values file.
+
+replicaCount: 3
+env: production
+
+image:
+  repository: "YOUR_ECR_OR_DOCKERHUB/devops-practice-app"
+  tag: "latest"
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: ecr-registry-secret
+
+serviceAccount:
+  create: false
+  name: devops-app-sa
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:123456789012:certificate/YOUR-CERT"
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+  hosts:
+    - host: app.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: tls-secret
+      hosts:
+        - app.example.com
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+config:
+  NODE_ENV: "production"
+  PORT: "3000"
+  DB_HOST: "mysql-service.database.svc.cluster.local"
+  DB_PORT: "3306"
+  DB_NAME: "devopsdb"
+  LOG_LEVEL: "info"
+
+secrets:
+  DB_USER: "appuser"          # use External Secrets in real env
+  DB_PASSWORD: "apppassword"  # use External Secrets in real env
+
+mysql:
+  enabled: true
+  namespace: database
+  image: mysql:8.0
+  storage: 20Gi
+  storageClass: gp2
+  rootPassword: "rootpassword"
+  user: "appuser"
+  password: "apppassword"
+  database: "devopsdb"
+
+monitoring:
+  enabled: true
+  prometheus:
+    scrape: true
+    port: 3000
+    path: /metrics
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [devops-app]
+          topologyKey: kubernetes.io/hostname

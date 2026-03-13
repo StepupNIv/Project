@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+app/node_modules/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+logs/
+
+# Build / coverage
+app/coverage/
+dist/
+build/
+
+# Secrets
+*.pem
+*.key
+kubeconfig
+*-secret.yaml
+
+# Backups
+mysql/backup/*.sql.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
