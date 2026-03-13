@@ -1,0 +1,97 @@
+// ─── Rollback Pipeline ────────────────────────────────────────────────────────
+// Manually triggered. Rolls back Helm release to a previous revision.
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'rollback-agent'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-deployer
+  containers:
+    - name: helm
+      image: alpine/helm:3.12.0
+      command: [cat]
+      tty: true
+    - name: kubectl
+      image: bitnami/kubectl:1.28
+      command: [cat]
+      tty: true
+"""
+        }
+    }
+
+    parameters {
+        choice(name: 'NAMESPACE',  choices: ['production', 'staging'], description: 'Target namespace')
+        string(name: 'REVISION',   defaultValue: '0', description: 'Helm revision to roll back to (0 = previous)')
+        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Dry run only (do not actually rollback)')
+    }
+
+    environment {
+        HELM_RELEASE = 'devops-app'
+    }
+
+    stages {
+        stage('List Helm History') {
+            steps {
+                container('helm') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh "helm history ${HELM_RELEASE} -n ${params.NAMESPACE} --max 10"
+                    }
+                }
+            }
+        }
+
+        stage('Confirm Rollback') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: "⚠️  Roll back ${HELM_RELEASE} in *${params.NAMESPACE}* to revision ${params.REVISION}?", ok: 'Rollback Now'
+                }
+            }
+        }
+
+        stage('Execute Rollback') {
+            when {
+                expression { return !params.DRY_RUN }
+            }
+            steps {
+                container('helm') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh """
+                            helm rollback ${HELM_RELEASE} ${params.REVISION} \
+                              -n ${params.NAMESPACE} \
+                              --wait --timeout 5m
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                container('kubectl') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh """
+                            kubectl rollout status deployment/devops-app \
+                              -n ${params.NAMESPACE} --timeout=3m
+                            kubectl get pods -n ${params.NAMESPACE} -l app=devops-app
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            slackSend channel: '#devops-alerts', color: 'warning',
+              message: "🔄 ROLLBACK completed for `${HELM_RELEASE}` in *${params.NAMESPACE}* to revision ${params.REVISION}"
+        }
+        failure {
+            slackSend channel: '#devops-alerts', color: 'danger',
+              message: "❌ ROLLBACK FAILED for `${HELM_RELEASE}` in *${params.NAMESPACE}*\n${env.BUILD_URL}"
+        }
+    }
+}

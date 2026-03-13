@@ -1,0 +1,335 @@
+// ─── DevOps Practice App - Main Jenkinsfile ──────────────────────────────────
+// Triggered on every push to any branch. Full pipeline:
+//   Build → Test → Lint → Docker Build → Push ECR → Deploy to K8s → Verify
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'jenkins-agent'
+            defaultContainer 'jnlp'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-deployer
+  containers:
+    - name: node
+      image: node:18-alpine
+      command: [cat]
+      tty: true
+    - name: docker
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+    - name: kubectl
+      image: bitnami/kubectl:1.28
+      command: [cat]
+      tty: true
+    - name: helm
+      image: alpine/helm:3.12.0
+      command: [cat]
+      tty: true
+    - name: trivy
+      image: aquasec/trivy:latest
+      command: [cat]
+      tty: true
+"""
+        }
+    }
+
+    // ── Pipeline Parameters ───────────────────────────────────────────────
+    parameters {
+        booleanParam(name: 'SKIP_TESTS',   defaultValue: false, description: 'Skip unit tests')
+        booleanParam(name: 'SKIP_SCAN',    defaultValue: false, description: 'Skip Trivy security scan')
+        booleanParam(name: 'DEPLOY_PROD',  defaultValue: false, description: 'Deploy to production (main branch only)')
+        string(name: 'IMAGE_TAG',          defaultValue: '', description: 'Override image tag (leave blank for auto)')
+    }
+
+    // ── Environment Variables ─────────────────────────────────────────────
+    environment {
+        // AWS & ECR
+        AWS_REGION       = 'us-east-1'
+        AWS_ACCOUNT_ID   = credentials('aws-account-id')
+        ECR_REGISTRY     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        ECR_REPO         = 'devops-practice-app'
+
+        // Image tagging
+        GIT_SHORT_SHA    = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        IMAGE_TAG_AUTO   = "${env.BRANCH_NAME}-${GIT_SHORT_SHA}-${env.BUILD_NUMBER}"
+        FINAL_TAG        = params.IMAGE_TAG ?: env.IMAGE_TAG_AUTO
+        FULL_IMAGE       = "${ECR_REGISTRY}/${ECR_REPO}:${FINAL_TAG}"
+
+        // Kubernetes
+        KUBE_CONFIG      = credentials('kubeconfig-eks')
+        K8S_NAMESPACE    = "${env.BRANCH_NAME == 'main' ? 'production' : 'staging'}"
+        HELM_RELEASE     = 'devops-app'
+
+        // SonarQube
+        SONAR_HOST_URL   = credentials('sonar-url')
+        SONAR_TOKEN      = credentials('sonar-token')
+
+        // Notifications
+        SLACK_CHANNEL    = '#devops-alerts'
+    }
+
+    // ── Pipeline Options ──────────────────────────────────────────────────
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+        ansiColor('xterm')
+    }
+
+    stages {
+
+        // ─── 1. Checkout & Setup ──────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "🔍 Branch: ${env.BRANCH_NAME} | Tag: ${FINAL_TAG}"
+                sh 'git log --oneline -5'
+            }
+        }
+
+        // ─── 2. Install Dependencies ──────────────────────────────────────
+        stage('Install Dependencies') {
+            steps {
+                container('node') {
+                    dir('app') {
+                        sh 'npm ci --prefer-offline'
+                    }
+                }
+            }
+        }
+
+        // ─── 3. Lint ──────────────────────────────────────────────────────
+        stage('Lint') {
+            steps {
+                container('node') {
+                    dir('app') {
+                        sh 'npm run lint || true'
+                    }
+                }
+            }
+        }
+
+        // ─── 4. Unit Tests ────────────────────────────────────────────────
+        stage('Unit Tests') {
+            when {
+                expression { return !params.SKIP_TESTS }
+            }
+            steps {
+                container('node') {
+                    dir('app') {
+                        sh 'npm test -- --ci --coverage --reporters=default --reporters=jest-junit'
+                    }
+                }
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'app/junit.xml'
+                    publishHTML(target: [
+                        allowMissing: true,
+                        reportDir: 'app/coverage/lcov-report',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                }
+            }
+        }
+
+        // ─── 5. SonarQube Analysis ────────────────────────────────────────
+        stage('SonarQube Analysis') {
+            when {
+                branch 'main'
+            }
+            steps {
+                container('node') {
+                    withSonarQubeEnv('SonarQube') {
+                        dir('app') {
+                            sh """
+                                npx sonar-scanner \
+                                  -Dsonar.projectKey=devops-practice-app \
+                                  -Dsonar.sources=src \
+                                  -Dsonar.tests=tests \
+                                  -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                            """
+                        }
+                    }
+                }
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ─── 6. Docker Build ──────────────────────────────────────────────
+        stage('Docker Build') {
+            steps {
+                container('docker') {
+                    dir('app') {
+                        sh """
+                            docker build \
+                              --build-arg SKIP_TESTS=true \
+                              --tag ${FULL_IMAGE} \
+                              --tag ${ECR_REGISTRY}/${ECR_REPO}:latest \
+                              --label git-commit=${GIT_SHORT_SHA} \
+                              --label build-date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                              --label jenkins-build=${env.BUILD_NUMBER} \
+                              --file Dockerfile \
+                              .
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── 7. Security Scan (Trivy) ─────────────────────────────────────
+        stage('Security Scan') {
+            when {
+                expression { return !params.SKIP_SCAN }
+            }
+            steps {
+                container('trivy') {
+                    sh """
+                        trivy image \
+                          --exit-code 1 \
+                          --severity HIGH,CRITICAL \
+                          --no-progress \
+                          --format table \
+                          ${FULL_IMAGE} || echo "⚠️  Vulnerabilities found - review report"
+                    """
+                }
+            }
+        }
+
+        // ─── 8. Push to ECR ───────────────────────────────────────────────
+        stage('Push to ECR') {
+            steps {
+                container('docker') {
+                    withAWS(region: AWS_REGION, credentials: 'aws-credentials') {
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} \
+                              | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                            docker push ${FULL_IMAGE}
+                            docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── 9. Deploy to Staging ─────────────────────────────────────────
+        stage('Deploy → Staging') {
+            when {
+                not { branch 'main' }
+            }
+            steps {
+                container('helm') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh """
+                            helm upgrade --install ${HELM_RELEASE} ./helm \
+                              --namespace staging \
+                              --create-namespace \
+                              --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                              --set image.tag=${FINAL_TAG} \
+                              --set replicaCount=1 \
+                              --set env=staging \
+                              --wait --timeout 5m
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── 10. Integration Tests (Staging) ─────────────────────────────
+        stage('Integration Tests') {
+            when {
+                not { branch 'main' }
+            }
+            steps {
+                container('node') {
+                    sh """
+                        sleep 10
+                        curl -f http://devops-app-service.staging.svc.cluster.local/health \
+                          && echo "✅ Health check passed" \
+                          || (echo "❌ Health check failed" && exit 1)
+                    """
+                }
+            }
+        }
+
+        // ─── 11. Deploy → Production ──────────────────────────────────────
+        stage('Deploy → Production') {
+            when {
+                allOf {
+                    branch 'main'
+                    expression { return params.DEPLOY_PROD }
+                }
+            }
+            steps {
+                // Manual approval gate
+                timeout(time: 10, unit: 'MINUTES') {
+                    input message: "🚀 Deploy ${FINAL_TAG} to PRODUCTION?", ok: 'Deploy'
+                }
+                container('helm') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh """
+                            helm upgrade --install ${HELM_RELEASE} ./helm \
+                              --namespace production \
+                              --create-namespace \
+                              --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                              --set image.tag=${FINAL_TAG} \
+                              --set replicaCount=3 \
+                              --set env=production \
+                              --atomic --timeout 10m
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── 12. Verify Deployment ────────────────────────────────────────
+        stage('Verify Deployment') {
+            when {
+                branch 'main'
+            }
+            steps {
+                container('kubectl') {
+                    withKubeConfig([credentialsId: 'kubeconfig-eks']) {
+                        sh """
+                            kubectl rollout status deployment/devops-app \
+                              -n ${K8S_NAMESPACE} --timeout=5m
+                            kubectl get pods -n ${K8S_NAMESPACE} -l app=devops-app
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Post Actions ──────────────────────────────────────────────────────
+    post {
+        success {
+            slackSend(
+                channel: SLACK_CHANNEL,
+                color: 'good',
+                message: "✅ *SUCCESS* `${env.JOB_NAME}` #${env.BUILD_NUMBER} — `${FINAL_TAG}` deployed to *${K8S_NAMESPACE}*\n<${env.BUILD_URL}|View Build>"
+            )
+        }
+        failure {
+            slackSend(
+                channel: SLACK_CHANNEL,
+                color: 'danger',
+                message: "❌ *FAILED* `${env.JOB_NAME}` #${env.BUILD_NUMBER} on branch `${env.BRANCH_NAME}`\n<${env.BUILD_URL}|View Build>"
+            )
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

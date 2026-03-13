@@ -1,0 +1,107 @@
+// ─── MySQL Backup Pipeline ────────────────────────────────────────────────────
+// Runs on a CRON schedule. Dumps MySQL → gzip → upload to S3.
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'backup-agent'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: mysql-client
+      image: mysql:8.0
+      command: [cat]
+      tty: true
+    - name: aws-cli
+      image: amazon/aws-cli:latest
+      command: [cat]
+      tty: true
+"""
+        }
+    }
+
+    triggers {
+        cron('0 2 * * *')   // Daily at 02:00 UTC
+    }
+
+    environment {
+        DB_HOST     = 'mysql-service.database.svc.cluster.local'
+        DB_NAME     = 'devopsdb'
+        DB_USER     = credentials('mysql-user')
+        DB_PASSWORD = credentials('mysql-password')
+        S3_BUCKET   = 'devops-mysql-backups'
+        AWS_REGION  = 'us-east-1'
+        BACKUP_DATE = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        BACKUP_FILE = "backup_${BACKUP_DATE}.sql.gz"
+    }
+
+    stages {
+        stage('Dump Database') {
+            steps {
+                container('mysql-client') {
+                    sh """
+                        mysqldump \
+                          -h ${DB_HOST} \
+                          -u ${DB_USER} \
+                          -p${DB_PASSWORD} \
+                          --single-transaction \
+                          --routines \
+                          --triggers \
+                          ${DB_NAME} | gzip > /tmp/${BACKUP_FILE}
+                        echo "✅ Dump created: ${BACKUP_FILE}"
+                        ls -lh /tmp/${BACKUP_FILE}
+                    """
+                }
+            }
+        }
+
+        stage('Upload to S3') {
+            steps {
+                container('aws-cli') {
+                    withAWS(region: AWS_REGION, credentials: 'aws-credentials') {
+                        sh """
+                            aws s3 cp /tmp/${BACKUP_FILE} \
+                              s3://${S3_BUCKET}/daily/${BACKUP_FILE} \
+                              --storage-class STANDARD_IA
+                            echo "✅ Uploaded to s3://${S3_BUCKET}/daily/${BACKUP_FILE}"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Cleanup Old Backups') {
+            steps {
+                container('aws-cli') {
+                    withAWS(region: AWS_REGION, credentials: 'aws-credentials') {
+                        sh """
+                            # Delete backups older than 30 days
+                            aws s3 ls s3://${S3_BUCKET}/daily/ \
+                              | awk '{print \$4}' \
+                              | while read key; do
+                                  created=\$(aws s3api head-object --bucket ${S3_BUCKET} --key daily/\$key --query 'LastModified' --output text)
+                                  age_days=\$(( ($(date +%s) - $(date -d "\$created" +%s)) / 86400 ))
+                                  if [ \$age_days -gt 30 ]; then
+                                    aws s3 rm s3://${S3_BUCKET}/daily/\$key
+                                    echo "🗑️  Deleted old backup: \$key (\$age_days days old)"
+                                  fi
+                                done
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            slackSend channel: '#devops-alerts', color: 'danger',
+              message: "❌ MySQL Backup FAILED on ${env.BUILD_URL}"
+        }
+        success {
+            echo "✅ Backup completed: ${BACKUP_FILE}"
+        }
+    }
+}
